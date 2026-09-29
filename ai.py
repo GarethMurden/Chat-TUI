@@ -21,7 +21,12 @@ def ask(key, prompt, history=[]):
     # ]
 
     system_prompt = get_system_prompt()
-    if history[0] != system_prompt:
+    if len(history) == 0:
+        messages = get_system_prompt() + history + [{
+            'role':'user',
+            'content':prompt
+        }]
+    elif history[0] != system_prompt:
         messages = get_system_prompt() + history + [{
             'role':'user',
             'content':prompt
@@ -52,23 +57,7 @@ def ask(key, prompt, history=[]):
         'reasoning_details':response.get('reasoning')
     }]
 
-    return response.get('content'), response.get('reasoning'), new_history
-
-def chat():
-    key = auth()
-    if key is not None:
-        history = []
-        while True:
-            message = input(' 👤 ')
-            print(' 💻 ...', end='\r')
-            response, reasoning, history = ask(
-                key,
-                message,
-                history
-            )
-            print(f' 💻 {response}')
-            if len(history) > 10:
-                history = history[-10:]
+    return {'success': 'error' not in response, 'data': {'content': response.get('content', response['error']['message']), 'reasoning': response.get('reasoning'), 'history': new_history}}
 
 def get_system_prompt():
     if os.path.exists('system_prompt.json'):

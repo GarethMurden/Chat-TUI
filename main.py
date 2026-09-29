@@ -1,7 +1,9 @@
+from datetime import datetime
 import os
 import json
-from textual.containers import Container, ScrollableContainer
 from textual.app import App, ComposeResult
+from textual.containers import Container, ScrollableContainer
+from textual.events import Key
 from textual.widgets import Footer, Header, ListView, ListItem, Label, Markdown, Input
 from textual import work
 
@@ -46,21 +48,34 @@ class Importer(App):
         .user_message, Input {
             color: $secondary;
         }
+
+        .system_message {
+            color: $primary;
+        }
         
     '''
 
     key = ai.auth()
+    current_focus = 'right'
     session_list = None
     current_session = None
     session_history = []
     history_limit = 30
+
+    class CustomListItem(ListItem):
+        '''Custom widget for sessions based on ListItem'''
+        def __init__(self, description: str):
+            super().__init__()
+            self.description = description
+
+        def compose( self ):
+            yield Label(f'  {self.description}  ')
 
     def compose(self) -> ComposeResult:
         '''Create child widgets for the app.'''   
         yield Header(show_clock=True)
 
         self.session_list = ListView(
-            ListItem(Label('  NEW  ')),
             id='session_list'
         )
       
@@ -98,17 +113,16 @@ class Importer(App):
         self.theme = 'arasaka'
         self.bind(keys='ctrl+s', action='session_list')
 
-        # load previous sessions
-        session_ids = self.list_sessions()
-        for session in session_ids:
-            self.session_list.append(ListItem(Label(f' {session} ')))
-        self.current_session = session_ids[0]
-        self.session_list.index = 1
-        self.session_history = self.load_session(self.current_session)
+        self.update_session_list()
 
     # =========================
     #  Actions
     # =========================
+
+    def action_session_list(self) -> None:
+        '''Move focus to session list'''
+        self.current_focus = 'left'
+        self.query_one('#session_list').focus()
 
     def on_input_submitted(self, event: Input.Submitted):
         user_message = event.value
@@ -123,23 +137,19 @@ class Importer(App):
             self.query_one('#message_history').scroll_end()
             self.query_ai(user_message)
 
-    def action_session_list(self) -> None:
-        '''Move focus to date panel'''
-        self.notify(
-           'Focus on left panel',
-            title='DEBUG',
-            severity='warning'
-        )
-        self.query_one('#session_list').focus()
-
-    def action_focus_right(self) -> None:
-        '''Move focus to task panel'''
-        self.notify(
-           'Focus on right panel',
-            title='DEBUG',
-            severity='warning'
-        )
-        self.query_one('#right').focus()
+    def on_key(self, event: Key):
+        if event.key == 'enter' or event.key == 'right':
+            if self.current_focus == 'left':
+                if self.session_list.index == 0:
+                    self.current_session = 'NEW'
+                    self.session_history = self.load_session(None)
+                else:
+                    self.current_session = self.list_sessions()[self.session_list.index -1]
+                    self.session_history = self.load_session(self.current_session)
+                self.query_one('#user_message_input').focus()
+        if event.key == 'left':
+            self.current_focus = 'left'
+            self.query_one('#session_list').focus()
 
     # =========================
     #  General functions
@@ -150,47 +160,94 @@ class Importer(App):
         return [f.split(os.sep)[-1].replace('.json', '') for f in session_files]
 
     def load_session(self, session_id):
-        history = load_json(f'{THIS_DIRECTORY}sessions{os.sep}{session_id}.json')
-        for message in history[-self.history_limit:]:
-            if message['role'] == 'user':
-                self.query_one('#message_history').mount(
-                    Markdown(
-                        f"\n{message['content']}",
-                        classes='user_message'
+        self.query_one('#message_history').remove_children()
+        history = []
+        if session_id is not None:
+            history = load_json(f'{THIS_DIRECTORY}sessions{os.sep}{session_id}.json')
+            for message in history[-self.history_limit:]:
+                if message['role'] == 'user':
+                    self.query_one('#message_history').mount(
+                        Markdown(
+                            f"\n{message['content']}",
+                            classes='user_message'
+                        )
                     )
-                )
-            elif message['role'] == 'assistant':
-                self.query_one('#message_history').mount(
-                    Markdown(
-                        f"\n{message['content']}",
-                        classes='ai_response'
+                elif message['role'] == 'assistant':
+                    self.query_one('#message_history').mount(
+                        Markdown(
+                            f"\n{message['content']}",
+                            classes='ai_response'
+                        )
                     )
-                )
         self.query_one('#message_history').scroll_end()
         return history
 
     @work(thread=True)
     def query_ai(self, user_message):
-        response, reasoning, self.session_history = ai.ask(
+        result = ai.ask(
             self.key,
             user_message,
             self.session_history
         )
-        self.save_session(self.current_session)
-        if len(self.session_history) > self.history_limit:
-            self.session_history = self.session_history[-self.history_limit:]
-        self.call_from_thread(
-            self.show_ai_response,
-            response
-        )
+        if result['success']:
+            response = result['data']['content']
+            reasoning = result['data']['reasoning']
+            self.session_history = result['data']['history']
 
+            if self.current_session == 'NEW' or self.current_session is None:
+                self.current_session = datetime.now().strftime('%d %b %H-%M')
+                self.save_session(self.current_session)
+                self.call_from_thread(
+                    self.update_session_list,
+                    -1,
+                    False
+                )
+            else:
+                self.save_session(self.current_session)
+            if len(self.session_history) > self.history_limit:
+                self.session_history = self.session_history[-self.history_limit:]
+            self.call_from_thread(
+                self.show_ai_response,
+                response
+            )
+
+        else:
+            self.notify(
+                result['data']['content'],
+                title='Error',
+                severity='error'
+            )
+        
+        
     def save_session(self, session_id):
+        self.notify(
+           f'{len(self.session_history)} messages saved to {session_id}.json',
+            title='DEBUG',
+            severity='warning'
+        )
         save_as = f'{THIS_DIRECTORY}sessions{os.sep}{session_id}.json'
         save_json(self.session_history, save_as)
 
     def show_ai_response(self, response):
-        self.query_one('#message_history').mount(Markdown(f'\n{response.lstrip()}', classes='ai_response'))
+        if response is not None:
+            self.query_one('#message_history').mount(Markdown(f'\n{response.lstrip()}', classes='ai_response'))
+        
         self.query_one('#message_history').scroll_end()
+
+    def update_session_list(self, selected=1, show_all=True):
+        self.session_list.remove_children()
+        self.session_list.append(self.CustomListItem('NEW'))
+        session_ids = self.list_sessions()#[::-1]
+        for session in session_ids:
+            self.session_list.append(self.CustomListItem(session))
+        if len(session_ids) > 0:
+            self.current_session = session_ids[0]
+            self.session_list.index = selected
+        else:
+            self.current_session = 'NEW'
+            self.session_list.index = 0
+        if show_all:
+            self.session_history = self.load_session(self.current_session)
 
 def list_files(folder, extensions=None):
     file_list = []
@@ -221,4 +278,5 @@ if __name__ == '__main__':
     # - Start new session from NEW option
     # - Option to delete a session
     # - Show model for each response
+    # - Rename session
 
