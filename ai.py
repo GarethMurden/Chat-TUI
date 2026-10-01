@@ -22,12 +22,18 @@ def ask(key, prompt, history=[]):
 
     system_prompt = get_system_prompt()
     if len(history) == 0:
-        messages = get_system_prompt() + history + [{
+        messages = system_prompt + history + [{
             'role':'user',
             'content':prompt
         }]
-    elif history[0] != system_prompt:
-        messages = get_system_prompt() + history + [{
+    elif history[0]['role'] != 'system':
+
+        messages = system_prompt + history + [{
+            'role':'user',
+            'content':prompt
+        }]
+    else:
+        messages = history + [{
             'role':'user',
             'content':prompt
         }]
@@ -57,7 +63,7 @@ def ask(key, prompt, history=[]):
         'reasoning_details':response.get('reasoning')
     }]
 
-    return {'success': 'error' not in response, 'data': {'content': response.get('content', response['error']['message']), 'reasoning': response.get('reasoning'), 'history': new_history}}
+    return {'success': 'error' not in response, 'data': {'content': response.get('content', response.get('error')), 'reasoning': response.get('reasoning'), 'history': new_history}}
 
 def get_system_prompt():
     if os.path.exists('system_prompt.json'):
@@ -73,9 +79,3 @@ def save_json(data, filename):
         
 if __name__ == '__main__':
     chat()
-
-    # TODO:
-    #   - Textual UI
-    #   - Save conversation history
-    #   - Pass larger history/context with each message
-

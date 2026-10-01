@@ -1,11 +1,11 @@
 from datetime import datetime
 import os
 import json
-from textual.app import App, ComposeResult
-from textual.containers import Container, ScrollableContainer
+from textual.app import App, ComposeResult, Screen
+from textual.containers import Container, ScrollableContainer, Horizontal, Vertical
 from textual.events import Key
-from textual.widgets import Footer, Header, ListView, ListItem, Label, Markdown, Input
-from textual import work
+from textual.widgets import Footer, Header, ListView, ListItem, Label, Markdown, Input, Button
+from textual import work, on
 
 from themes import *
 import ai
@@ -15,7 +15,8 @@ THIS_DIRECTORY = f'{dirname}{os.sep}'
 
 class Importer(App):
     BINDINGS = [
-        ('^s', 'session_list', 'session list')
+        ('^s', 'session_list', 'session list'),
+        ('^d', 'delete_session', 'delete session'),
     ]
 
     CSS = '''
@@ -52,6 +53,33 @@ class Importer(App):
         .system_message {
             color: $primary;
         }
+
+        ConfirmationPopup {
+            layout: vertical;
+            content-align: center middle;
+            align: center middle;
+        }
+        
+        ConfirmationPopup Vertical {
+            width: auto;
+            height: auto;
+        }
+        
+        ConfirmationPopup Label {
+            text-align: center;
+            width: auto;
+            margin-bottom: 1;
+        }
+        
+        ConfirmationPopup Horizontal {
+            width: auto;
+            content-align: center middle;
+        }
+        
+        ConfirmationPopup Button {
+            width: 10;
+            margin: 0 1;
+        }
         
     '''
 
@@ -62,8 +90,42 @@ class Importer(App):
     session_history = []
     history_limit = 30
 
+    class ConfirmationPopup(Screen):
+        def __init__(self, session_to_delete):
+            super().__init__()
+            self.session_to_delete = session_to_delete
+
+        def compose(self):
+            with Vertical():
+                yield Label(f'Permanently delete the "{self.session_to_delete}" session?')
+                with Horizontal():
+                    yield Button("Yes", id="yes")
+                    yield Button("No", id="no")
+
+        def on_mount(self):
+            self.query_one(Button).focus()
+
+        @on(Button.Pressed)
+        def on_button_pressed(self, event):
+            if event.button.id == "yes":
+                os.remove(
+                    f'{THIS_DIRECTORY}sessions{os.sep}{self.session_to_delete}.json'
+                )
+                self.app.update_session_list(selected=0, show_all=True)
+                self.notify(
+                    f'The "{self.session_to_delete}" session has been deleted',
+                    title='Session deleted'
+                ) 
+            self.app.pop_screen()
+
+        def on_key(self, event: Key):
+            buttons = list(self.query(Button))
+            if event.key == 'left':
+                buttons[0].focus()
+            if event.key == 'right':
+                buttons[1].focus()
+
     class CustomListItem(ListItem):
-        '''Custom widget for sessions based on ListItem'''
         def __init__(self, description: str):
             super().__init__()
             self.description = description
@@ -112,6 +174,7 @@ class Importer(App):
         self.register_theme(lcars_theme)
         self.theme = 'arasaka'
         self.bind(keys='ctrl+s', action='session_list')
+        self.bind(keys='ctrl+d', action='delete_session')
 
         self.update_session_list()
 
@@ -119,8 +182,10 @@ class Importer(App):
     #  Actions
     # =========================
 
-    def action_session_list(self) -> None:
-        '''Move focus to session list'''
+    def action_delete_session(self):
+        self.app.push_screen(self.ConfirmationPopup(self.current_session))
+
+    def action_session_list(self):
         self.current_focus = 'left'
         self.query_one('#session_list').focus()
 
@@ -147,9 +212,9 @@ class Importer(App):
                     self.current_session = self.list_sessions()[self.session_list.index -1]
                     self.session_history = self.load_session(self.current_session)
                 self.query_one('#user_message_input').focus()
-        if event.key == 'left':
-            self.current_focus = 'left'
-            self.query_one('#session_list').focus()
+        # if event.key == 'left':
+        #     self.current_focus = 'left'
+        #     self.query_one('#session_list').focus()
 
     # =========================
     #  General functions
@@ -216,15 +281,9 @@ class Importer(App):
                 result['data']['content'],
                 title='Error',
                 severity='error'
-            )
-        
+            )      
         
     def save_session(self, session_id):
-        self.notify(
-           f'{len(self.session_history)} messages saved to {session_id}.json',
-            title='DEBUG',
-            severity='warning'
-        )
         save_as = f'{THIS_DIRECTORY}sessions{os.sep}{session_id}.json'
         save_json(self.session_history, save_as)
 
